@@ -5,6 +5,7 @@ import 'dart:math';
 import 'package:clock/clock.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'package:rxdart/rxdart.dart';
 import 'package:speech_to_text/speech_recognition_error.dart';
 import 'package:speech_to_text/speech_recognition_result.dart';
 
@@ -62,6 +63,14 @@ typedef SpeechSoundLevelChange = Function(double level);
 /// // At some point later
 /// speech.stop();
 /// ```
+///
+
+enum SpeechPlayerState {
+  started,
+  stopped,
+  cancelled,
+}
+
 class SpeechToText {
   static const String listenMethod = 'listen';
   static const String textRecognitionMethod = 'textRecognition';
@@ -72,9 +81,14 @@ class SpeechToText {
   static const String listeningStatus = "listening";
 
   static const MethodChannel speechChannel =
-      const MethodChannel('plugin.csdcorp.com/speech_to_text');
+  const MethodChannel('plugin.csdcorp.com/speech_to_text');
   static final SpeechToText _instance =
-      SpeechToText.withMethodChannel(speechChannel);
+  SpeechToText.withMethodChannel(speechChannel);
+
+  final _onStateSubject = BehaviorSubject<SpeechPlayerState>();
+
+  Stream<SpeechPlayerState> get onStateChanged => _onStateSubject.stream;
+
   bool _initWorked = false;
   bool _recognized = false;
   bool _listening = false;
@@ -102,6 +116,7 @@ class SpeechToText {
   SpeechSoundLevelChange _soundLevelChange;
 
   final MethodChannel channel;
+
   factory SpeechToText() => _instance;
 
   @visibleForTesting
@@ -137,6 +152,7 @@ class SpeechToText {
   ///
   /// Also goes false when listening times out if listenFor was set.
   bool get isListening => _listening;
+
   bool get isNotListening => !isListening;
 
   /// The last error received or null if none, see [initialize] to
@@ -176,10 +192,9 @@ class SpeechToText {
   /// [debugLogging] controls whether there is detailed logging from the underlying
   /// plugins. It is off by default, usually only useful for troubleshooting issues
   /// with a paritcular OS version or device, fairly verbose
-  Future<bool> initialize(
-      {SpeechErrorListener onError,
-      SpeechStatusListener onStatus,
-      debugLogging = false}) async {
+  Future<bool> initialize({SpeechErrorListener onError,
+    SpeechStatusListener onStatus,
+    debugLogging = false}) async {
     if (_initWorked) {
       return Future.value(_initWorked);
     }
@@ -210,6 +225,7 @@ class SpeechToText {
     if (!_initWorked) {
       return;
     }
+    _onStateSubject.add(SpeechPlayerState.stopped);
     _shutdownListener();
     await channel.invokeMethod('stop');
     Timer(Duration(milliseconds: 100), _notifyFinalResults);
@@ -234,6 +250,7 @@ class SpeechToText {
     if (!_initWorked) {
       return;
     }
+    _onStateSubject.add(SpeechPlayerState.cancelled);
     _shutdownListener();
     await channel.invokeMethod('cancel');
   }
@@ -285,17 +302,16 @@ class SpeechToText {
   /// crash with `sampleRate != device's supported sampleRate`, try 44100 if seeing
   /// crashes
   ///
-  Future listen(
-      {SpeechResultListener onResult,
-      Duration listenFor,
-      Duration pauseFor,
-      String localeId,
-      SpeechSoundLevelChange onSoundLevelChange,
-      cancelOnError = false,
-      partialResults = true,
-      onDevice = false,
-      ListenMode listenMode = ListenMode.confirmation,
-      sampleRate = 0}) async {
+  Future listen({SpeechResultListener onResult,
+    Duration listenFor,
+    Duration pauseFor,
+    String localeId,
+    SpeechSoundLevelChange onSoundLevelChange,
+    cancelOnError = false,
+    partialResults = true,
+    onDevice = false,
+    ListenMode listenMode = ListenMode.confirmation,
+    sampleRate = 0}) async {
     if (!_initWorked) {
       throw SpeechToTextNotInitializedException();
     }
@@ -319,7 +335,10 @@ class SpeechToText {
     try {
       bool started = await channel.invokeMethod(listenMethod, listenParams);
       if (started) {
-        _listenStartedAt = clock.now().millisecondsSinceEpoch;
+        _onStateSubject.add(SpeechPlayerState.started);
+        _listenStartedAt = clock
+            .now()
+            .millisecondsSinceEpoch;
         _setupListenAndPause(pauseFor, listenFor);
       }
     } on PlatformException catch (e) {
@@ -352,9 +371,14 @@ class SpeechToText {
   }
 
   int get _elapsedListenMillis =>
-      clock.now().millisecondsSinceEpoch - _listenStartedAt;
+      clock
+          .now()
+          .millisecondsSinceEpoch - _listenStartedAt;
+
   int get _elapsedSinceSpeechEvent =>
-      clock.now().millisecondsSinceEpoch - _lastSpeechEventAt;
+      clock
+          .now()
+          .millisecondsSinceEpoch - _lastSpeechEventAt;
 
   void _stopOnPauseOrListen() {
     // print("Stop? $_elapsedListenMillis / $_elapsedSinceSpeechEvent");
@@ -386,12 +410,12 @@ class SpeechToText {
     final List<dynamic> locales = await channel.invokeMethod('locales');
     List<LocaleName> filteredLocales = locales
         .map((locale) {
-          var components = locale.split(":");
-          if (components.length != 2) {
-            return null;
-          }
-          return LocaleName(components[0], components[1]);
-        })
+      var components = locale.split(":");
+      if (components.length != 2) {
+        return null;
+      }
+      return LocaleName(components[0], components[1]);
+    })
         .where((item) => item != null)
         .toList();
     if (filteredLocales.isNotEmpty) {
@@ -442,9 +466,11 @@ class SpeechToText {
   void _onTextRecognition(String resultJson) {
     Map<String, dynamic> resultMap = jsonDecode(resultJson);
     SpeechRecognitionResult speechResult =
-        SpeechRecognitionResult.fromJson(resultMap);
+    SpeechRecognitionResult.fromJson(resultMap);
     if (_lastSpeechResult == null || _lastSpeechResult != speechResult) {
-      _lastSpeechEventAt = clock.now().millisecondsSinceEpoch;
+      _lastSpeechEventAt = clock
+          .now()
+          .millisecondsSinceEpoch;
     }
     _lastSpeechResult = speechResult;
     if (!_partialResults && !speechResult.finalResult) {
@@ -477,7 +503,7 @@ class SpeechToText {
     }
     Map<String, dynamic> errorMap = jsonDecode(errorJson);
     SpeechRecognitionError speechError =
-        SpeechRecognitionError.fromJson(errorMap);
+    SpeechRecognitionError.fromJson(errorMap);
     _lastError = speechError;
     if (null != errorListener) {
       errorListener(speechError);
@@ -525,6 +551,7 @@ class SpeechToText {
 class LocaleName {
   final String localeId;
   final String name;
+
   LocaleName(this.localeId, this.name);
 }
 
@@ -536,5 +563,6 @@ class SpeechToTextNotInitializedException implements Exception {}
 /// on the device
 class ListenFailedException implements Exception {
   final String details;
+
   ListenFailedException(this.details);
 }
