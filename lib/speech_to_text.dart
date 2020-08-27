@@ -225,10 +225,10 @@ class SpeechToText {
     if (!_initWorked) {
       return;
     }
-    _onStateSubject.add(SpeechPlayerState.stopped);
     _shutdownListener();
     await channel.invokeMethod('stop');
     Timer(Duration(milliseconds: 100), _notifyFinalResults);
+    _onStateSubject.add(SpeechPlayerState.stopped);
   }
 
   /// Cancels the current listen for speech if active, does nothing if not.
@@ -250,9 +250,9 @@ class SpeechToText {
     if (!_initWorked) {
       return;
     }
-    _onStateSubject.add(SpeechPlayerState.cancelled);
     _shutdownListener();
     await channel.invokeMethod('cancel');
+    _onStateSubject.add(SpeechPlayerState.cancelled);
   }
 
   /// Starts a listening session for speech and converts it to text,
